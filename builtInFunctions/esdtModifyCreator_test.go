@@ -193,6 +193,7 @@ func TestESDTModifyCreator_ProcessBuiltinFunction(t *testing.T) {
 			},
 		}
 		e, _ := NewESDTModifyCreatorFunc(0, &mock.AccountsStub{}, &mock.GlobalSettingsHandlerStub{}, &mock.ESDTNFTStorageHandlerStub{}, rolesHandler, enableEpochsHandler, &mock.MarshalizerMock{})
+		e.SetDRWAReader(newNoopDRWAReader())
 		vmInput := &vmcommon.ContractCallInput{
 			VMInput: vmcommon.VMInput{
 				CallValue:  big.NewInt(0),
@@ -257,12 +258,13 @@ func TestESDTModifyCreator_ProcessBuiltinFunction(t *testing.T) {
 			},
 		}
 		e, _ := NewESDTModifyCreatorFunc(101, accounts, globalSettingsHandler, storageHandler, &mock.ESDTRoleHandlerStub{}, enableEpochsHandler, &mock.MarshalizerMock{})
+		e.SetDRWAReader(newNoopDRWAReader())
 
 		vmInput := &vmcommon.ContractCallInput{
 			VMInput: vmcommon.VMInput{
 				CallValue:   big.NewInt(0),
 				CallerAddr:  []byte("caller"),
-				GasProvided: 1000,
+				GasProvided: 5000,
 				Arguments:   [][]byte{tokenId, {15}},
 			},
 			RecipientAddr: []byte("caller"),
@@ -271,7 +273,7 @@ func TestESDTModifyCreator_ProcessBuiltinFunction(t *testing.T) {
 		vmOutput, err := e.ProcessBuiltinFunction(mock.NewUserAccount([]byte("addr")), nil, vmInput)
 		assert.Nil(t, err)
 		assert.Equal(t, vmcommon.Ok, vmOutput.ReturnCode)
-		assert.Equal(t, uint64(899), vmOutput.GasRemaining)
+		assert.Equal(t, uint64(4899), vmOutput.GasRemaining)
 		assert.True(t, saveESDTNFTTokenCalled)
 		assert.True(t, getESDTNFTTokenOnDestinationCalled)
 	})

@@ -14,13 +14,15 @@ const numArgsPerAdd = 3
 
 type esdtDeleteMetaData struct {
 	baseActiveHandler
-	allowedAddress []byte
-	delete         bool
-	accounts       vmcommon.AccountsAdapter
-	keyPrefix      []byte
-	marshaller     vmcommon.Marshalizer
-	funcGasCost    uint64
-	function       string
+	allowedAddress      []byte
+	delete              bool
+	accounts            vmcommon.AccountsAdapter
+	keyPrefix           []byte
+	marshaller          vmcommon.Marshalizer
+	enableEpochsHandler vmcommon.EnableEpochsHandler
+	funcGasCost         uint64
+	function            string
+	drwaReader          drwaStateReader
 }
 
 // ArgsNewESDTDeleteMetadata defines the argument list for new esdt delete metadata built in function
@@ -48,13 +50,14 @@ func NewESDTDeleteMetadataFunc(
 	}
 
 	e := &esdtDeleteMetaData{
-		keyPrefix:      []byte(baseESDTKeyPrefix),
-		marshaller:     args.Marshalizer,
-		funcGasCost:    args.FuncGasCost,
-		accounts:       args.Accounts,
-		allowedAddress: args.AllowedAddress,
-		delete:         args.Delete,
-		function:       core.BuiltInFunctionMultiESDTNFTTransfer,
+		keyPrefix:           []byte(baseESDTKeyPrefix),
+		marshaller:          args.Marshalizer,
+		enableEpochsHandler: args.EnableEpochsHandler,
+		funcGasCost:         args.FuncGasCost,
+		accounts:            args.Accounts,
+		allowedAddress:      args.AllowedAddress,
+		delete:              args.Delete,
+		function:            core.BuiltInFunctionMultiESDTNFTTransfer,
 	}
 
 	e.baseActiveHandler.activeHandler = func() bool {
@@ -62,6 +65,10 @@ func NewESDTDeleteMetadataFunc(
 	}
 
 	return e, nil
+}
+
+func (e *esdtDeleteMetaData) SetDRWAReader(reader drwaStateReader) {
+	e.drwaReader = reader
 }
 
 // SetNewGasConfig is called whenever gas cost is changed
@@ -87,6 +94,13 @@ func (e *esdtDeleteMetaData) ProcessBuiltinFunction(
 	}
 
 	if e.delete {
+		if isDRWAEnforcementEnabled(e.enableEpochsHandler) {
+			if e.drwaReader == nil {
+				recordDRWAGateMetric(drwaGateMetricReaderMissing)
+				return nil, errDRWAStateReaderMissing
+			}
+		}
+
 		err := e.deleteMetadata(vmInput.Arguments)
 		if err != nil {
 			return nil, err
@@ -122,6 +136,12 @@ func (e *esdtDeleteMetaData) deleteMetadata(args [][]byte) error {
 
 		if !vmcommon.ValidateToken(tokenID) {
 			return ErrInvalidTokenID
+		}
+		if isDRWAEnforcementEnabled(e.enableEpochsHandler) {
+			_, err = evaluateDRWAMetadataUpdate(e.drwaReader, tokenID, e.allowedAddress, nil)
+			if err != nil {
+				return err
+			}
 		}
 
 		if i >= lenArgs {

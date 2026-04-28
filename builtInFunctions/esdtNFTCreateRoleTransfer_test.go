@@ -15,19 +15,23 @@ import (
 func TestEsdtNFTCreateRoleTransfer_Constructor(t *testing.T) {
 	t.Parallel()
 
-	e, err := NewESDTNFTCreateRoleTransfer(nil, &mock.AccountsStub{}, mock.NewMultiShardsCoordinatorMock(2))
+	e, err := NewESDTNFTCreateRoleTransfer(nil, &mock.AccountsStub{}, mock.NewMultiShardsCoordinatorMock(2), &mock.EnableEpochsHandlerStub{})
 	assert.Nil(t, e)
 	assert.Equal(t, err, ErrNilMarshalizer)
 
-	e, err = NewESDTNFTCreateRoleTransfer(&mock.MarshalizerMock{}, nil, mock.NewMultiShardsCoordinatorMock(2))
+	e, err = NewESDTNFTCreateRoleTransfer(&mock.MarshalizerMock{}, nil, mock.NewMultiShardsCoordinatorMock(2), &mock.EnableEpochsHandlerStub{})
 	assert.Nil(t, e)
 	assert.Equal(t, err, ErrNilAccountsAdapter)
 
-	e, err = NewESDTNFTCreateRoleTransfer(&mock.MarshalizerMock{}, &mock.AccountsStub{}, nil)
+	e, err = NewESDTNFTCreateRoleTransfer(&mock.MarshalizerMock{}, &mock.AccountsStub{}, nil, &mock.EnableEpochsHandlerStub{})
 	assert.Nil(t, e)
 	assert.Equal(t, err, ErrNilShardCoordinator)
 
-	e, err = NewESDTNFTCreateRoleTransfer(&mock.MarshalizerMock{}, &mock.AccountsStub{}, mock.NewMultiShardsCoordinatorMock(2))
+	e, err = NewESDTNFTCreateRoleTransfer(&mock.MarshalizerMock{}, &mock.AccountsStub{}, mock.NewMultiShardsCoordinatorMock(2), nil)
+	assert.Nil(t, e)
+	assert.Equal(t, err, ErrNilEnableEpochsHandler)
+
+	e, err = NewESDTNFTCreateRoleTransfer(&mock.MarshalizerMock{}, &mock.AccountsStub{}, mock.NewMultiShardsCoordinatorMock(2), &mock.EnableEpochsHandlerStub{})
 	assert.Nil(t, err)
 	assert.NotNil(t, e)
 	assert.False(t, e.IsInterfaceNil())
@@ -38,7 +42,7 @@ func TestEsdtNFTCreateRoleTransfer_Constructor(t *testing.T) {
 func TestESDTNFTCreateRoleTransfer_ProcessWithErrors(t *testing.T) {
 	t.Parallel()
 
-	e, err := NewESDTNFTCreateRoleTransfer(&mock.MarshalizerMock{}, &mock.AccountsStub{}, mock.NewMultiShardsCoordinatorMock(2))
+	e, err := NewESDTNFTCreateRoleTransfer(&mock.MarshalizerMock{}, &mock.AccountsStub{}, mock.NewMultiShardsCoordinatorMock(2), &mock.EnableEpochsHandlerStub{})
 	assert.Nil(t, err)
 	assert.NotNil(t, e)
 
@@ -101,7 +105,7 @@ func createESDTNFTCreateRoleTransferComponent(t *testing.T) *esdtNFTCreateRoleTr
 		},
 	}
 
-	e, err := NewESDTNFTCreateRoleTransfer(marshaller, accounts, shardCoordinator)
+	e, err := NewESDTNFTCreateRoleTransfer(marshaller, accounts, shardCoordinator, &mock.EnableEpochsHandlerStub{})
 	assert.Nil(t, err)
 	assert.NotNil(t, e)
 	return e

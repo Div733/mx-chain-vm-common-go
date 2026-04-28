@@ -13,6 +13,7 @@ import (
 type esdtModifyCreator struct {
 	baseActiveHandler
 	vmcommon.BlockchainDataProvider
+	drwaReader            drwaStateReader
 	globalSettingsHandler vmcommon.GlobalMetadataHandler
 	storageHandler        vmcommon.ESDTNFTStorageHandler
 	rolesHandler          vmcommon.ESDTRoleHandler
@@ -71,6 +72,12 @@ func NewESDTModifyCreatorFunc(
 	return e, nil
 }
 
+func (e *esdtModifyCreator) SetDRWAReader(reader drwaStateReader) {
+	e.mutExecution.Lock()
+	e.drwaReader = reader
+	e.mutExecution.Unlock()
+}
+
 // ProcessBuiltinFunction saves the token type in the system account
 func (e *esdtModifyCreator) ProcessBuiltinFunction(acntSnd, _ vmcommon.UserAccountHandler, vmInput *vmcommon.ContractCallInput) (*vmcommon.VMOutput, error) {
 	err := checkUpdateArguments(vmInput, acntSnd, e.baseActiveHandler, 2, e.rolesHandler, core.ESDTRoleModifyCreator)
@@ -84,6 +91,23 @@ func (e *esdtModifyCreator) ProcessBuiltinFunction(acntSnd, _ vmcommon.UserAccou
 
 	if vmInput.GasProvided < funcGasCost {
 		return nil, ErrNotEnoughGas
+	}
+	drwaGasCost := uint64(0)
+	if isDRWAEnforcementEnabled(e.enableEpochsHandler) {
+		if e.drwaReader == nil {
+			recordDRWAGateMetric(drwaGateMetricReaderMissing)
+			return nil, errDRWAStateReaderMissing
+		}
+		regulated, drwaErr := evaluateDRWAMetadataUpdate(e.drwaReader, vmInput.Arguments[tokenIDIndex], vmInput.CallerAddr, acntSnd)
+		if drwaErr != nil {
+			return nil, drwaErr
+		}
+		if regulated {
+			drwaGasCost = computeDRWAReadGasCost(vmcommon.BaseOperationCost{}, funcGasCost, 4)
+			if vmInput.GasProvided < funcGasCost+drwaGasCost {
+				return nil, ErrNotEnoughGas
+			}
+		}
 	}
 
 	esdtInfo, err := getEsdtInfo(vmInput, acntSnd, e.storageHandler, e.globalSettingsHandler)
@@ -111,7 +135,7 @@ func (e *esdtModifyCreator) ProcessBuiltinFunction(acntSnd, _ vmcommon.UserAccou
 
 	vmOutput := &vmcommon.VMOutput{
 		ReturnCode:   vmcommon.Ok,
-		GasRemaining: vmInput.GasProvided - funcGasCost,
+		GasRemaining: vmInput.GasProvided - funcGasCost - drwaGasCost,
 	}
 
 	addESDTEntryInVMOutput(vmOutput, []byte(core.ESDTModifyCreator), vmInput.Arguments[tokenIDIndex], esdtInfo.esdtData.TokenMetaData.Nonce, big.NewInt(0), [][]byte{vmInput.CallerAddr}...)

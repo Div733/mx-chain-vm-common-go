@@ -54,6 +54,14 @@ func (e *esdtFreezeWipe) SetNewGasConfig(_ *vmcommon.GasCost) {
 }
 
 // ProcessBuiltinFunction resolves ESDT transfer function call
+//
+// C-01 carve-out decision:
+// Freeze / unfreeze / wipe remain privileged system-SC administrative actions.
+// They are intentionally not wired to the DRWA holder-compliance reader because
+// the caller is constrained to core.ESDTSCAddress and the operation semantics
+// are regulator / protocol-admin account control, not end-user transfer or
+// issuance authorization. This carve-out is explicit and documented in the
+// C-01 adoption artifacts; it is not an accidental gap.
 func (e *esdtFreezeWipe) ProcessBuiltinFunction(
 	_, acntDst vmcommon.UserAccountHandler,
 	vmInput *vmcommon.ContractCallInput,

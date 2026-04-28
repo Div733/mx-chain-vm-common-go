@@ -24,6 +24,14 @@ type esdtSetNewURIs struct {
 	gasConfig             vmcommon.BaseOperationCost
 	marshaller            marshal.Marshalizer
 	mutExecution          sync.RWMutex
+	drwaReader            drwaStateReader // L-4: DRWA metadata enforcement
+}
+
+// SetDRWAReader injects the DRWA compliance state reader for metadata enforcement (L-4).
+func (e *esdtSetNewURIs) SetDRWAReader(reader drwaStateReader) {
+	e.mutExecution.Lock()
+	defer e.mutExecution.Unlock()
+	e.drwaReader = reader
 }
 
 // NewESDTSetNewURIsFunc returns the esdt set new URIs built-in function component
@@ -82,6 +90,21 @@ func (e *esdtSetNewURIs) ProcessBuiltinFunction(acntSnd, _ vmcommon.UserAccountH
 	if err != nil {
 		return nil, err
 	}
+	drwaGasCost := uint64(0)
+	if isDRWAEnforcementEnabled(e.enableEpochsHandler) {
+		regulated, drwaErr := evaluateDRWAMetadataUpdate(e.drwaReader, vmInput.Arguments[0], vmInput.CallerAddr, acntSnd)
+		if regulated {
+			// 4 reads: policy + holder mirror + profile + auditor auth.
+			drwaGasCost = computeDRWAReadGasCost(e.gasConfig, e.funcGasCost, 4)
+			if vmInput.GasProvided < e.funcGasCost+drwaGasCost {
+				return nil, ErrNotEnoughGas
+			}
+		}
+		err = drwaErr
+		if err != nil {
+			return nil, err
+		}
+	}
 
 	esdtInfo, err := getEsdtInfo(vmInput, acntSnd, e.storageHandler, e.globalSettingsHandler)
 	if err != nil {
@@ -96,7 +119,7 @@ func (e *esdtSetNewURIs) ProcessBuiltinFunction(acntSnd, _ vmcommon.UserAccountH
 	}
 
 	e.mutExecution.RLock()
-	gasToUse := uint64(difference)*e.gasConfig.StorePerByte + e.funcGasCost
+	gasToUse := uint64(difference)*e.gasConfig.StorePerByte + e.funcGasCost + drwaGasCost
 	e.mutExecution.RUnlock()
 
 	if vmInput.GasProvided < gasToUse {
