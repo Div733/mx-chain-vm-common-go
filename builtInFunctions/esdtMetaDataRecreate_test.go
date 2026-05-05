@@ -253,6 +253,7 @@ func TestESDTMetaDataRecreate_ProcessBuiltinFunction(t *testing.T) {
 			},
 		}
 		e, _ := NewESDTMetaDataRecreateFunc(101, vmcommon.BaseOperationCost{StorePerByte: 1}, accounts, globalSettingsHandler, storageHandler, &mock.ESDTRoleHandlerStub{}, enableEpochsHandler, &mock.MarshalizerMock{})
+		e.SetDRWAReader(newNoopDRWAReader())
 
 		vmInput := &vmcommon.ContractCallInput{
 			VMInput: vmcommon.VMInput{
@@ -317,6 +318,7 @@ func TestESDTMetaDataRecreate_ProcessBuiltinFunction(t *testing.T) {
 			},
 		}
 		e, _ := NewESDTMetaDataRecreateFunc(101, vmcommon.BaseOperationCost{StorePerByte: 1}, accounts, globalSettingsHandler, storageHandler, &mock.ESDTRoleHandlerStub{}, enableEpochsHandler, &mock.MarshalizerMock{})
+		e.SetDRWAReader(newNoopDRWAReader())
 
 		vmInput := &vmcommon.ContractCallInput{
 			VMInput: vmcommon.VMInput{

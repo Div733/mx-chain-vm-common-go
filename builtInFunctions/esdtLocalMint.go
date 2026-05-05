@@ -12,11 +12,14 @@ import (
 
 type esdtLocalMint struct {
 	baseAlwaysActiveHandler
+	vmcommon.BlockchainDataProvider
 	keyPrefix             []byte
 	marshaller            vmcommon.Marshalizer
 	globalSettingsHandler vmcommon.ESDTGlobalSettingsHandler
 	rolesHandler          vmcommon.ESDTRoleHandler
 	enableEpochsHandler   vmcommon.EnableEpochsHandler
+	drwaReader            drwaStateReader
+	gasConfig             vmcommon.BaseOperationCost
 	funcGasCost           uint64
 	mutExecution          sync.RWMutex
 }
@@ -43,16 +46,23 @@ func NewESDTLocalMintFunc(
 	}
 
 	e := &esdtLocalMint{
-		keyPrefix:             []byte(baseESDTKeyPrefix),
-		marshaller:            marshaller,
-		globalSettingsHandler: globalSettingsHandler,
-		rolesHandler:          rolesHandler,
-		funcGasCost:           funcGasCost,
-		enableEpochsHandler:   enableEpochsHandler,
-		mutExecution:          sync.RWMutex{},
+		BlockchainDataProvider: NewBlockchainDataProvider(),
+		keyPrefix:              []byte(baseESDTKeyPrefix),
+		marshaller:             marshaller,
+		globalSettingsHandler:  globalSettingsHandler,
+		rolesHandler:           rolesHandler,
+		funcGasCost:            funcGasCost,
+		enableEpochsHandler:    enableEpochsHandler,
+		mutExecution:           sync.RWMutex{},
 	}
 
 	return e, nil
+}
+
+func (e *esdtLocalMint) SetDRWAReader(reader drwaStateReader) {
+	e.mutExecution.Lock()
+	e.drwaReader = reader
+	e.mutExecution.Unlock()
 }
 
 // SetNewGasConfig is called whenever gas cost is changed
@@ -63,6 +73,7 @@ func (e *esdtLocalMint) SetNewGasConfig(gasCost *vmcommon.GasCost) {
 
 	e.mutExecution.Lock()
 	e.funcGasCost = gasCost.BuiltInCost.ESDTLocalMint
+	e.gasConfig = gasCost.BaseOperationCost
 	e.mutExecution.Unlock()
 }
 
@@ -80,6 +91,25 @@ func (e *esdtLocalMint) ProcessBuiltinFunction(
 	}
 
 	tokenID := vmInput.Arguments[0]
+	drwaGasCost := uint64(0)
+	if isDRWAEnforcementEnabled(e.enableEpochsHandler) {
+		if e.drwaReader == nil {
+			recordDRWAGateMetric(drwaGateMetricReaderMissing)
+			return nil, errDRWAStateReaderMissing
+		}
+
+		regulated, drwaErr := evaluateDRWAReceiverTransfer(e.drwaReader, tokenID, vmInput.CallerAddr, acntSnd, e.CurrentRound())
+		if drwaErr != nil {
+			return nil, drwaErr
+		}
+		if regulated {
+			drwaGasCost = computeDRWAReadGasCost(e.gasConfig, e.funcGasCost, 4)
+			if vmInput.GasProvided < e.funcGasCost+drwaGasCost {
+				return nil, ErrNotEnoughGas
+			}
+		}
+	}
+
 	err = e.rolesHandler.CheckAllowedToExecute(acntSnd, tokenID, []byte(core.ESDTRoleLocalMint))
 	if err != nil {
 		return nil, err
@@ -100,7 +130,7 @@ func (e *esdtLocalMint) ProcessBuiltinFunction(
 		return nil, err
 	}
 
-	vmOutput := &vmcommon.VMOutput{ReturnCode: vmcommon.Ok, GasRemaining: vmInput.GasProvided - e.funcGasCost}
+	vmOutput := &vmcommon.VMOutput{ReturnCode: vmcommon.Ok, GasRemaining: vmInput.GasProvided - e.funcGasCost - drwaGasCost}
 
 	addESDTEntryInVMOutput(vmOutput, []byte(core.BuiltInFunctionESDTLocalMint), vmInput.Arguments[0], 0, value, vmInput.CallerAddr)
 

@@ -12,6 +12,10 @@ import (
 
 type esdtBurn struct {
 	baseActiveHandler
+	vmcommon.BlockchainDataProvider
+	enableEpochsHandler   vmcommon.EnableEpochsHandler
+	drwaReader            drwaStateReader
+	gasConfig             vmcommon.BaseOperationCost
 	funcGasCost           uint64
 	marshaller            vmcommon.Marshalizer
 	keyPrefix             []byte
@@ -37,10 +41,12 @@ func NewESDTBurnFunc(
 	}
 
 	e := &esdtBurn{
-		funcGasCost:           funcGasCost,
-		marshaller:            marshaller,
-		keyPrefix:             []byte(baseESDTKeyPrefix),
-		globalSettingsHandler: globalSettingsHandler,
+		BlockchainDataProvider: NewBlockchainDataProvider(),
+		enableEpochsHandler:    enableEpochsHandler,
+		funcGasCost:            funcGasCost,
+		marshaller:             marshaller,
+		keyPrefix:              []byte(baseESDTKeyPrefix),
+		globalSettingsHandler:  globalSettingsHandler,
 	}
 
 	e.baseActiveHandler.activeHandler = func() bool {
@@ -48,6 +54,12 @@ func NewESDTBurnFunc(
 	}
 
 	return e, nil
+}
+
+func (e *esdtBurn) SetDRWAReader(reader drwaStateReader) {
+	e.mutExecution.Lock()
+	e.drwaReader = reader
+	e.mutExecution.Unlock()
 }
 
 // SetNewGasConfig is called whenever gas cost is changed
@@ -58,6 +70,7 @@ func (e *esdtBurn) SetNewGasConfig(gasCost *vmcommon.GasCost) {
 
 	e.mutExecution.Lock()
 	e.funcGasCost = gasCost.BuiltInCost.ESDTBurn
+	e.gasConfig = gasCost.BaseOperationCost
 	e.mutExecution.Unlock()
 }
 
@@ -86,6 +99,24 @@ func (e *esdtBurn) ProcessBuiltinFunction(
 	if check.IfNil(acntSnd) {
 		return nil, ErrNilUserAccount
 	}
+	drwaGasCost := uint64(0)
+	if isDRWAEnforcementEnabled(e.enableEpochsHandler) {
+		if e.drwaReader == nil {
+			recordDRWAGateMetric(drwaGateMetricReaderMissing)
+			return nil, errDRWAStateReaderMissing
+		}
+
+		regulated, drwaErr := evaluateDRWASenderTransfer(e.drwaReader, vmInput.Arguments[0], vmInput.CallerAddr, acntSnd, e.CurrentRound())
+		if drwaErr != nil {
+			return nil, drwaErr
+		}
+		if regulated {
+			drwaGasCost = computeDRWAReadGasCost(e.gasConfig, e.funcGasCost, 4)
+			if vmInput.GasProvided < e.funcGasCost+drwaGasCost {
+				return nil, ErrNotEnoughGas
+			}
+		}
+	}
 
 	esdtTokenKey := append(e.keyPrefix, vmInput.Arguments[0]...)
 
@@ -99,6 +130,9 @@ func (e *esdtBurn) ProcessBuiltinFunction(
 	}
 
 	gasRemaining := computeGasRemaining(acntSnd, vmInput.GasProvided, e.funcGasCost)
+	if drwaGasCost > 0 {
+		gasRemaining = computeGasRemaining(acntSnd, vmInput.GasProvided, e.funcGasCost+drwaGasCost)
+	}
 	vmOutput := &vmcommon.VMOutput{GasRemaining: gasRemaining, ReturnCode: vmcommon.Ok}
 	if vmcommon.IsSmartContractAddress(vmInput.CallerAddr) {
 		addOutputTransferToVMOutput(

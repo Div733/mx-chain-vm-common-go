@@ -1,6 +1,9 @@
 package builtInFunctions
 
-import "github.com/multiversx/mx-chain-core-go/core"
+import (
+	"github.com/multiversx/mx-chain-core-go/core"
+	coredrwa "github.com/multiversx/mx-chain-core-go/data/drwa"
+)
 
 // Enable epoch flags definitions
 const (
@@ -28,6 +31,9 @@ const (
 	MigrateDataTrieFlag                         core.EnableEpochFlag = "MigrateDataTrieFlag"
 	DynamicEsdtFlag                             core.EnableEpochFlag = "DynamicEsdtFlag"
 	EGLDInESDTMultiTransferFlag                 core.EnableEpochFlag = "EGLDInESDTMultiTransferFlag"
+	// DRWAEnforcementFlag is imported from core so both this repo and mx-chain-go
+	// use the exact same string. A mismatch would make the gate permanently dormant.
+	DRWAEnforcementFlag = coredrwa.DRWAEnforcementFlag
 )
 
 // allFlags must have all flags used by mx-chain-vm-common-go in the current version
@@ -56,4 +62,5 @@ var allFlags = []core.EnableEpochFlag{
 	MigrateDataTrieFlag,
 	DynamicEsdtFlag,
 	EGLDInESDTMultiTransferFlag,
+	DRWAEnforcementFlag,
 }
