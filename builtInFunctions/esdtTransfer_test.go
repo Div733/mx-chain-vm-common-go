@@ -92,7 +92,7 @@ func TestESDTTransfer_ProcessBuiltInFunctionErrors(t *testing.T) {
 	value := []byte("value")
 	input.Arguments = [][]byte{key, value}
 	_, err = transferFunc.ProcessBuiltinFunction(nil, nil, input)
-	assert.Nil(t, err)
+	assert.ErrorContains(t, err, "both sender and receiver accounts nil")
 
 	input.GasProvided = transferFunc.funcGasCost - 1
 	accSnd := mock.NewUserAccount([]byte("address"))

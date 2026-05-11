@@ -33,6 +33,14 @@ type esdtMetaDataRecreate struct {
 	gasConfig             vmcommon.BaseOperationCost
 	marshaller            marshal.Marshalizer
 	mutExecution          sync.RWMutex
+	drwaReader            drwaStateReader // L-4: DRWA metadata enforcement
+}
+
+// SetDRWAReader injects the DRWA compliance state reader for metadata enforcement (L-4).
+func (e *esdtMetaDataRecreate) SetDRWAReader(reader drwaStateReader) {
+	e.mutExecution.Lock()
+	defer e.mutExecution.Unlock()
+	e.drwaReader = reader
 }
 
 // NewESDTMetaDataRecreateFunc returns the esdt meta data recreate built-in function component
@@ -240,6 +248,25 @@ func (e *esdtMetaDataRecreate) ProcessBuiltinFunction(acntSnd, _ vmcommon.UserAc
 	if err != nil {
 		return nil, err
 	}
+	drwaGasCost := uint64(0)
+	if isDRWAEnforcementEnabled(e.enableEpochsHandler) {
+		if e.drwaReader == nil {
+			recordDRWAGateMetric(drwaGateMetricReaderMissing)
+			return nil, errDRWAStateReaderMissing
+		}
+		regulated, drwaErr := evaluateDRWAMetadataUpdate(e.drwaReader, vmInput.Arguments[0], vmInput.CallerAddr, acntSnd)
+		if regulated {
+			// 4 reads: policy + holder mirror + profile + auditor auth.
+			drwaGasCost = computeDRWAReadGasCost(e.gasConfig, e.funcGasCost, 4)
+			if vmInput.GasProvided < e.funcGasCost+drwaGasCost {
+				return nil, ErrNotEnoughGas
+			}
+		}
+		err = drwaErr
+		if err != nil {
+			return nil, err
+		}
+	}
 
 	totalLengthDifference := lenArgs(vmInput.Arguments)
 
@@ -254,7 +281,7 @@ func (e *esdtMetaDataRecreate) ProcessBuiltinFunction(acntSnd, _ vmcommon.UserAc
 	}
 
 	e.mutExecution.RLock()
-	gasToUse := uint64(totalLengthDifference)*e.gasConfig.StorePerByte + e.funcGasCost
+	gasToUse := uint64(totalLengthDifference)*e.gasConfig.StorePerByte + e.funcGasCost + drwaGasCost
 	e.mutExecution.RUnlock()
 	if vmInput.GasProvided < gasToUse {
 		return nil, ErrNotEnoughGas

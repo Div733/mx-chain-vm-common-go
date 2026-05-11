@@ -13,10 +13,14 @@ import (
 
 type esdtNFTCreateRoleTransfer struct {
 	baseAlwaysActiveHandler
-	keyPrefix        []byte
-	marshaller       vmcommon.Marshalizer
-	accounts         vmcommon.AccountsAdapter
-	shardCoordinator vmcommon.Coordinator
+	vmcommon.BlockchainDataProvider
+	keyPrefix           []byte
+	marshaller          vmcommon.Marshalizer
+	accounts            vmcommon.AccountsAdapter
+	shardCoordinator    vmcommon.Coordinator
+	enableEpochsHandler vmcommon.EnableEpochsHandler
+	gasConfig           vmcommon.BaseOperationCost
+	drwaReader          drwaStateReader
 }
 
 // NewESDTNFTCreateRoleTransfer returns the esdt NFT create role transfer built-in function component
@@ -24,6 +28,7 @@ func NewESDTNFTCreateRoleTransfer(
 	marshaller vmcommon.Marshalizer,
 	accounts vmcommon.AccountsAdapter,
 	shardCoordinator vmcommon.Coordinator,
+	enableEpochsHandler vmcommon.EnableEpochsHandler,
 ) (*esdtNFTCreateRoleTransfer, error) {
 	if check.IfNil(marshaller) {
 		return nil, ErrNilMarshalizer
@@ -34,19 +39,33 @@ func NewESDTNFTCreateRoleTransfer(
 	if check.IfNil(shardCoordinator) {
 		return nil, ErrNilShardCoordinator
 	}
+	if check.IfNil(enableEpochsHandler) {
+		return nil, ErrNilEnableEpochsHandler
+	}
 
 	e := &esdtNFTCreateRoleTransfer{
-		keyPrefix:        []byte(baseESDTKeyPrefix),
-		marshaller:       marshaller,
-		accounts:         accounts,
-		shardCoordinator: shardCoordinator,
+		BlockchainDataProvider: NewBlockchainDataProvider(),
+		keyPrefix:              []byte(baseESDTKeyPrefix),
+		marshaller:             marshaller,
+		accounts:               accounts,
+		shardCoordinator:       shardCoordinator,
+		enableEpochsHandler:    enableEpochsHandler,
 	}
 
 	return e, nil
 }
 
+func (e *esdtNFTCreateRoleTransfer) SetDRWAReader(reader drwaStateReader) {
+	e.drwaReader = reader
+}
+
 // SetNewGasConfig is called whenever gas cost is changed
-func (e *esdtNFTCreateRoleTransfer) SetNewGasConfig(_ *vmcommon.GasCost) {
+func (e *esdtNFTCreateRoleTransfer) SetNewGasConfig(gasCost *vmcommon.GasCost) {
+	if gasCost == nil {
+		return
+	}
+
+	e.gasConfig = gasCost.BaseOperationCost
 }
 
 // ProcessBuiltinFunction resolves ESDT create role transfer function call
@@ -64,6 +83,36 @@ func (e *esdtNFTCreateRoleTransfer) ProcessBuiltinFunction(
 	}
 	if check.IfNil(acntDst) {
 		return nil, ErrNilUserAccount
+	}
+	if isDRWAEnforcementEnabled(e.enableEpochsHandler) {
+		if e.drwaReader == nil {
+			recordDRWAGateMetric(drwaGateMetricReaderMissing)
+			return nil, errDRWAStateReaderMissing
+		}
+
+		var targetAddr []byte
+		var targetAcc vmcommon.UserAccountHandler
+		if bytes.Equal(vmInput.CallerAddr, core.ESDTSCAddress) {
+			if len(vmInput.Arguments) >= 2 {
+				targetAddr = vmInput.Arguments[1]
+			}
+			targetAcc = nil
+		} else {
+			targetAddr = acntDst.AddressBytes()
+			targetAcc = acntDst
+		}
+
+		regulated, drwaErr := evaluateDRWAReceiverTransfer(e.drwaReader, vmInput.Arguments[0], targetAddr, targetAcc, e.CurrentRound())
+		if regulated {
+			drwaGasCost := computeDRWAReadGasCost(e.gasConfig, 0, 4)
+			if vmInput.GasProvided < drwaGasCost {
+				return nil, ErrNotEnoughGas
+			}
+		}
+		err = drwaErr
+		if err != nil {
+			return nil, err
+		}
 	}
 
 	vmOutput := &vmcommon.VMOutput{ReturnCode: vmcommon.Ok}

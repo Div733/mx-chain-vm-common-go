@@ -228,6 +228,30 @@ func TestESDTNFTAddUri_ProcessBuiltinFunctionInvalidNumberOfArguments(t *testing
 	require.Equal(t, ErrInvalidArguments, err)
 }
 
+func TestESDTNFTAddUri_ProcessBuiltinFunctionDRWAReaderMissing(t *testing.T) {
+	t.Parallel()
+
+	enableEpochsHandler := &mock.EnableEpochsHandlerStub{
+		IsFlagEnabledCalled: func(flag core.EnableEpochFlag) bool {
+			return true
+		},
+	}
+	e, _ := NewESDTNFTAddUriFunc(10, vmcommon.BaseOperationCost{}, createNewESDTDataStorageHandler(), &mock.GlobalSettingsHandlerStub{}, &mock.ESDTRoleHandlerStub{}, enableEpochsHandler, &mock.MarshalizerMock{})
+	vmInput := &vmcommon.ContractCallInput{
+		VMInput: vmcommon.VMInput{
+			CallValue:   big.NewInt(0),
+			Arguments:   [][]byte{[]byte("TOKEN-123"), {15}, []byte("uri")},
+			CallerAddr:  []byte("caller"),
+			GasProvided: 1000,
+		},
+		RecipientAddr: []byte("caller"),
+	}
+
+	vmOutput, err := e.ProcessBuiltinFunction(mock.NewUserAccount([]byte("addr")), nil, vmInput)
+	require.Nil(t, vmOutput)
+	require.ErrorIs(t, err, errDRWAStateReaderMissing)
+}
+
 func TestESDTNFTAddUri_ProcessBuiltinFunctionCheckAllowedToExecuteError(t *testing.T) {
 	t.Parallel()
 

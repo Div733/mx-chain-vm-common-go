@@ -398,6 +398,29 @@ func TestESDTNFTMultiTransfer_ProcessBuiltinFunctionOnSameShardWithScCall(t *tes
 	require.Equal(t, []byte(scCallArg), args[0])
 }
 
+func TestESDTNFTMultiTransfer_ProcessBuiltinFunctionRejectsEmptyArguments(t *testing.T) {
+	t.Parallel()
+
+	multiTransfer := createESDTNFTMultiTransferWithMockArguments(0, 1, &mock.GlobalSettingsHandlerStub{})
+
+	vmOutput, err := multiTransfer.ProcessBuiltinFunction(
+		&mock.UserAccountStub{},
+		&mock.UserAccountStub{},
+		&vmcommon.ContractCallInput{
+			VMInput: vmcommon.VMInput{
+				CallerAddr:  bytes.Repeat([]byte{2}, 32),
+				Arguments:   [][]byte{},
+				CallValue:   big.NewInt(0),
+				GasProvided: 1_000,
+			},
+			RecipientAddr: bytes.Repeat([]byte{2}, 32),
+		},
+	)
+
+	require.Nil(t, vmOutput)
+	require.ErrorIs(t, err, ErrInvalidArguments)
+}
+
 func TestESDTNFTMultiTransfer_ProcessBuiltinFunctionOnSameShardShouldCheckTokenValueLength(t *testing.T) {
 	t.Parallel()
 
@@ -1259,6 +1282,7 @@ func TestESDTNFTMultiTransfer_ProcessBuiltinFunctionOnSameShardWithScCallWithEGL
 			return flag != EGLDInESDTMultiTransferFlag
 		},
 	}
+	multiTransfer.SetDRWAReader(newNoopDRWAReader())
 
 	sender, err := multiTransfer.accounts.LoadAccount(vmInput.CallerAddr)
 	require.Nil(t, err)
@@ -1270,6 +1294,155 @@ func TestESDTNFTMultiTransfer_ProcessBuiltinFunctionOnSameShardWithScCallWithEGL
 	require.Equal(t, err.Error(), "insufficient quantity for token: EGLD-000000 for token EGLD-000000")
 }
 
+func TestESDTNFTMultiTransfer_ProcessBuiltinFunction_DRWACachesPolicyPerTokenOnSenderShard(t *testing.T) {
+	t.Parallel()
+
+	multiTransfer := createESDTNFTMultiTransferWithMockArguments(0, 1, &mock.GlobalSettingsHandlerStub{})
+	multiTransfer.enableEpochsHandler = drwaEnabledEpochsHandler(ESDTNFTImprovementV1Flag, CheckCorrectTokenIDForTransferRoleFlag)
+
+	payableChecker, err := NewPayableCheckFunc(
+		&mock.PayableHandlerStub{
+			IsPayableCalled: func(address []byte) (bool, error) {
+				return true, nil
+			},
+		},
+		&mock.EnableEpochsHandlerStub{
+			IsFlagEnabledCalled: func(flag core.EnableEpochFlag) bool {
+				return flag == FixAsyncCallbackCheckFlag || flag == CheckFunctionArgumentFlag
+			},
+		},
+	)
+	require.NoError(t, err)
+	require.NoError(t, multiTransfer.SetPayableChecker(payableChecker))
+
+	tokenPolicyCalls := 0
+	multiTransfer.SetDRWAReader(&drwaReaderStub{
+		getTokenPolicy: func(tokenIdentifier []byte) (*drwaTokenPolicyView, error) {
+			tokenPolicyCalls++
+			return &drwaTokenPolicyView{DRWAEnabled: true}, nil
+		},
+		getHolder: func(tokenIdentifier []byte, address []byte, currentAccount vmcommon.UserAccountHandler) (*drwaHolderMirrorView, error) {
+			return &drwaHolderMirrorView{
+				KYCStatus: "approved",
+				AMLStatus: "approved",
+			}, nil
+		},
+	})
+
+	senderAddress := bytes.Repeat([]byte{2}, 32)
+	destinationAddress := bytes.Repeat([]byte{0}, 32)
+	destinationAddress[25] = 1
+
+	senderAccount, err := multiTransfer.accounts.LoadAccount(senderAddress)
+	require.NoError(t, err)
+	destinationAccount, err := multiTransfer.accounts.LoadAccount(destinationAddress)
+	require.NoError(t, err)
+
+	createESDTNFTToken([]byte("CARBON-MULTI"), core.Fungible, 0, big.NewInt(3), multiTransfer.marshaller, senderAccount.(vmcommon.UserAccountHandler))
+	require.NoError(t, multiTransfer.accounts.SaveAccount(senderAccount))
+	require.NoError(t, multiTransfer.accounts.SaveAccount(destinationAccount))
+	_, _ = multiTransfer.accounts.Commit()
+
+	senderAccount, err = multiTransfer.accounts.LoadAccount(senderAddress)
+	require.NoError(t, err)
+	destinationAccount, err = multiTransfer.accounts.LoadAccount(destinationAddress)
+	require.NoError(t, err)
+
+	vmInput := &vmcommon.ContractCallInput{
+		VMInput: vmcommon.VMInput{
+			CallerAddr:  senderAddress,
+			CallValue:   big.NewInt(0),
+			GasProvided: 100000,
+			Arguments: [][]byte{
+				destinationAddress,
+				big.NewInt(1).Bytes(),
+				[]byte("CARBON-MULTI"),
+				big.NewInt(0).Bytes(),
+				big.NewInt(1).Bytes(),
+			},
+		},
+		RecipientAddr: senderAddress,
+	}
+
+	output, err := multiTransfer.ProcessBuiltinFunction(senderAccount.(vmcommon.UserAccountHandler), destinationAccount.(vmcommon.UserAccountHandler), vmInput)
+	require.NoError(t, err)
+	require.NotNil(t, output)
+	require.Equal(t, 1, tokenPolicyCalls, "multi transfer should read DRWA policy once per token and reuse it across validation passes")
+}
+
+func TestESDTNFTMultiTransfer_TransferOneTokenOnSenderShard_DoesNotMutateBeforeLimitedTransferAuthorization(t *testing.T) {
+	t.Parallel()
+
+	tokenID := []byte("limited-token")
+	nonce := uint64(7)
+	senderAddress := bytes.Repeat([]byte{2}, 32)
+	destinationAddress := bytes.Repeat([]byte{3}, 32)
+	sender := mock.NewUserAccount(senderAddress)
+	destination := mock.NewUserAccount(destinationAddress)
+
+	saveCalls := 0
+	storageHandler := &mock.ESDTNFTStorageHandlerStub{
+		GetESDTNFTTokenOnSenderCalled: func(acnt vmcommon.UserAccountHandler, esdtTokenKey []byte, providedNonce uint64) (*esdt.ESDigitalToken, error) {
+			require.Equal(t, append([]byte(baseESDTKeyPrefix), tokenID...), esdtTokenKey)
+			require.Equal(t, nonce, providedNonce)
+			return &esdt.ESDigitalToken{
+				Type:  uint32(core.NonFungible),
+				Value: big.NewInt(2),
+			}, nil
+		},
+		SaveESDTNFTTokenCalled: func(senderAddress []byte, acnt vmcommon.UserAccountHandler, esdtTokenKey []byte, providedNonce uint64, esdtData *esdt.ESDigitalToken, saveArgs vmcommon.NftSaveArgs) ([]byte, error) {
+			saveCalls++
+			return nil, nil
+		},
+	}
+
+	globalSettings := &mock.GlobalSettingsHandlerStub{
+		IsLimiterTransferCalled: func(token []byte) bool {
+			return true
+		},
+		IsSenderOrDestinationWithTransferRoleCalled: func(sender, destination, token []byte) bool {
+			return false
+		},
+	}
+
+	enableEpochsHandler := &mock.EnableEpochsHandlerStub{
+		IsFlagEnabledCalled: func(flag core.EnableEpochFlag) bool {
+			return flag == ESDTNFTImprovementV1Flag || flag == CheckCorrectTokenIDForTransferRoleFlag
+		},
+	}
+
+	multiTransfer, err := NewESDTNFTMultiTransferFunc(
+		1,
+		&mock.MarshalizerMock{},
+		globalSettings,
+		&mock.AccountsStub{},
+		mock.NewMultiShardsCoordinatorMock(4),
+		vmcommon.BaseOperationCost{},
+		enableEpochsHandler,
+		&mock.ESDTRoleHandlerStub{
+			CheckAllowedToExecuteCalled: func(account vmcommon.UserAccountHandler, token []byte, action []byte) error {
+				return ErrActionNotAllowed
+			},
+		},
+		storageHandler,
+	)
+	require.NoError(t, err)
+
+	_, err = multiTransfer.transferOneTokenOnSenderShard(
+		sender,
+		destination,
+		destinationAddress,
+		&vmcommon.ESDTTransfer{
+			ESDTTokenName:  tokenID,
+			ESDTTokenNonce: nonce,
+			ESDTValue:      big.NewInt(1),
+		},
+		false,
+	)
+	require.ErrorIs(t, err, ErrActionNotAllowed)
+	require.Zero(t, saveCalls, "sender-side NFT state must not be persisted before limited-transfer authorization succeeds")
+}
+
 func TestESDTNFTMultiTransfer_ProcessBuiltinFunctionOnSameShardWithScCallWithEGLD(t *testing.T) {
 	t.Parallel()
 
@@ -1279,6 +1452,7 @@ func TestESDTNFTMultiTransfer_ProcessBuiltinFunctionOnSameShardWithScCallWithEGL
 			return true
 		},
 	}
+	multiTransfer.SetDRWAReader(newNoopDRWAReader())
 
 	sender, err := multiTransfer.accounts.LoadAccount(vmInput.CallerAddr)
 	require.Nil(t, err)
@@ -1311,6 +1485,66 @@ func TestESDTNFTMultiTransfer_ProcessBuiltinFunctionOnSameShardWithScCallWithEGL
 	assert.Equal(t, scCallFunctionAsHex, funcName)
 	require.Equal(t, 1, len(args))
 	require.Equal(t, []byte(scCallArg), args[0])
+}
+
+func TestESDTNFTMultiTransfer_TransferOneTokenOnSenderShardPropagatesMigratedTokenTypeToTransferPayload(t *testing.T) {
+	t.Parallel()
+
+	tokenID := []byte("NFT-123456")
+	nonce := uint64(1)
+	senderAddress := []byte("sender")
+	destinationAddress := []byte("destination")
+	sender := mock.NewUserAccount(senderAddress)
+
+	storageHandler := &mock.ESDTNFTStorageHandlerStub{
+		GetESDTNFTTokenOnSenderCalled: func(acnt vmcommon.UserAccountHandler, esdtTokenKey []byte, providedNonce uint64) (*esdt.ESDigitalToken, error) {
+			require.Equal(t, append([]byte(baseESDTKeyPrefix), tokenID...), esdtTokenKey)
+			require.Equal(t, nonce, providedNonce)
+
+			return &esdt.ESDigitalToken{
+				Type:  uint32(core.NonFungible),
+				Value: big.NewInt(2),
+			}, nil
+		},
+		SaveESDTNFTTokenCalled: func(senderAddr []byte, acnt vmcommon.UserAccountHandler, esdtTokenKey []byte, providedNonce uint64, esdtData *esdt.ESDigitalToken, _ vmcommon.NftSaveArgs) ([]byte, error) {
+			require.Equal(t, senderAddress, senderAddr)
+			require.Equal(t, append([]byte(baseESDTKeyPrefix), tokenID...), esdtTokenKey)
+			require.Equal(t, nonce, providedNonce)
+
+			// Mirrors the real SaveESDTNFTToken() migration after updateTokenID:
+			// the sender-side persisted record is upgraded to NonFungibleV2.
+			esdtData.Type = uint32(core.NonFungibleV2)
+			return nil, nil
+		},
+	}
+
+	multiTransfer, err := NewESDTNFTMultiTransferFunc(
+		1,
+		&mock.MarshalizerMock{},
+		&mock.GlobalSettingsHandlerStub{},
+		&mock.AccountsStub{},
+		mock.NewMultiShardsCoordinatorMock(4),
+		vmcommon.BaseOperationCost{},
+		&mock.EnableEpochsHandlerStub{},
+		&mock.ESDTRoleHandlerStub{},
+		storageHandler,
+	)
+	require.NoError(t, err)
+
+	esdtData, err := multiTransfer.transferOneTokenOnSenderShard(
+		sender,
+		nil,
+		destinationAddress,
+		&vmcommon.ESDTTransfer{
+			ESDTTokenName:  tokenID,
+			ESDTTokenNonce: nonce,
+			ESDTValue:      big.NewInt(1),
+		},
+		false,
+	)
+	require.NoError(t, err)
+	require.Equal(t, uint32(core.NonFungibleV2), esdtData.Type)
+	require.Equal(t, int64(1), esdtData.Value.Int64())
 }
 
 func TestESDTNFTMultiTransfer_ProcessBuiltinFunctionOnCrossShardsWithEGLD(t *testing.T) {
@@ -1369,6 +1603,8 @@ func TestESDTNFTMultiTransfer_ProcessBuiltinFunctionOnCrossShardsWithEGLD(t *tes
 			return true
 		},
 	}
+	multiTransferSenderShard.SetDRWAReader(newNoopDRWAReader())
+	multiTransferDestinationShard.SetDRWAReader(newNoopDRWAReader())
 
 	vmOutput, err := multiTransferSenderShard.ProcessBuiltinFunction(sender.(vmcommon.UserAccountHandler), nil, vmInput)
 	require.Nil(t, err)

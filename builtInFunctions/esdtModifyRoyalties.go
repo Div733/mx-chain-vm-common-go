@@ -20,6 +20,7 @@ const (
 type esdtModifyRoyalties struct {
 	baseActiveHandler
 	vmcommon.BlockchainDataProvider
+	drwaReader            drwaStateReader
 	globalSettingsHandler vmcommon.GlobalMetadataHandler
 	storageHandler        vmcommon.ESDTNFTStorageHandler
 	rolesHandler          vmcommon.ESDTRoleHandler
@@ -78,6 +79,12 @@ func NewESDTModifyRoyaltiesFunc(
 	return e, nil
 }
 
+func (e *esdtModifyRoyalties) SetDRWAReader(reader drwaStateReader) {
+	e.mutExecution.Lock()
+	e.drwaReader = reader
+	e.mutExecution.Unlock()
+}
+
 // ProcessBuiltinFunction saves the token type in the system account
 func (e *esdtModifyRoyalties) ProcessBuiltinFunction(acntSnd, _ vmcommon.UserAccountHandler, vmInput *vmcommon.ContractCallInput) (*vmcommon.VMOutput, error) {
 	err := checkUpdateArguments(vmInput, acntSnd, e.baseActiveHandler, 3, e.rolesHandler, core.ESDTRoleModifyRoyalties)
@@ -90,6 +97,23 @@ func (e *esdtModifyRoyalties) ProcessBuiltinFunction(acntSnd, _ vmcommon.UserAcc
 	e.mutExecution.RUnlock()
 	if vmInput.GasProvided < funcGasCost {
 		return nil, ErrNotEnoughGas
+	}
+	drwaGasCost := uint64(0)
+	if isDRWAEnforcementEnabled(e.enableEpochsHandler) {
+		if e.drwaReader == nil {
+			recordDRWAGateMetric(drwaGateMetricReaderMissing)
+			return nil, errDRWAStateReaderMissing
+		}
+		regulated, drwaErr := evaluateDRWAMetadataUpdate(e.drwaReader, vmInput.Arguments[tokenIDIndex], vmInput.CallerAddr, acntSnd)
+		if drwaErr != nil {
+			return nil, drwaErr
+		}
+		if regulated {
+			drwaGasCost = computeDRWAReadGasCost(vmcommon.BaseOperationCost{}, funcGasCost, 4)
+			if vmInput.GasProvided < funcGasCost+drwaGasCost {
+				return nil, ErrNotEnoughGas
+			}
+		}
 	}
 
 	esdtInfo, err := getEsdtInfo(vmInput, acntSnd, e.storageHandler, e.globalSettingsHandler)
@@ -122,7 +146,7 @@ func (e *esdtModifyRoyalties) ProcessBuiltinFunction(acntSnd, _ vmcommon.UserAcc
 
 	vmOutput := &vmcommon.VMOutput{
 		ReturnCode:   vmcommon.Ok,
-		GasRemaining: vmInput.GasProvided - funcGasCost,
+		GasRemaining: vmInput.GasProvided - funcGasCost - drwaGasCost,
 	}
 
 	extraTopics := [][]byte{vmInput.CallerAddr, vmInput.Arguments[newRoyaltiesIndex]}

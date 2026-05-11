@@ -14,11 +14,14 @@ const maxLenForAddNFTQuantity = 32
 
 type esdtNFTAddQuantity struct {
 	baseAlwaysActiveHandler
+	vmcommon.BlockchainDataProvider
 	keyPrefix             []byte
 	globalSettingsHandler vmcommon.ESDTGlobalSettingsHandler
 	rolesHandler          vmcommon.ESDTRoleHandler
 	esdtStorageHandler    vmcommon.ESDTNFTStorageHandler
 	enableEpochsHandler   vmcommon.EnableEpochsHandler
+	drwaReader            drwaStateReader
+	gasConfig             vmcommon.BaseOperationCost
 	funcGasCost           uint64
 	mutExecution          sync.RWMutex
 }
@@ -45,16 +48,23 @@ func NewESDTNFTAddQuantityFunc(
 	}
 
 	e := &esdtNFTAddQuantity{
-		keyPrefix:             []byte(baseESDTKeyPrefix),
-		globalSettingsHandler: globalSettingsHandler,
-		rolesHandler:          rolesHandler,
-		funcGasCost:           funcGasCost,
-		mutExecution:          sync.RWMutex{},
-		esdtStorageHandler:    esdtStorageHandler,
-		enableEpochsHandler:   enableEpochsHandler,
+		BlockchainDataProvider: NewBlockchainDataProvider(),
+		keyPrefix:              []byte(baseESDTKeyPrefix),
+		globalSettingsHandler:  globalSettingsHandler,
+		rolesHandler:           rolesHandler,
+		funcGasCost:            funcGasCost,
+		mutExecution:           sync.RWMutex{},
+		esdtStorageHandler:     esdtStorageHandler,
+		enableEpochsHandler:    enableEpochsHandler,
 	}
 
 	return e, nil
+}
+
+func (e *esdtNFTAddQuantity) SetDRWAReader(reader drwaStateReader) {
+	e.mutExecution.Lock()
+	e.drwaReader = reader
+	e.mutExecution.Unlock()
 }
 
 // SetNewGasConfig is called whenever gas cost is changed
@@ -65,6 +75,7 @@ func (e *esdtNFTAddQuantity) SetNewGasConfig(gasCost *vmcommon.GasCost) {
 
 	e.mutExecution.Lock()
 	e.funcGasCost = gasCost.BuiltInCost.ESDTNFTAddQuantity
+	e.gasConfig = gasCost.BaseOperationCost
 	e.mutExecution.Unlock()
 }
 
@@ -86,6 +97,24 @@ func (e *esdtNFTAddQuantity) ProcessBuiltinFunction(
 	}
 	if len(vmInput.Arguments) < 3 {
 		return nil, ErrInvalidArguments
+	}
+	drwaGasCost := uint64(0)
+	if isDRWAEnforcementEnabled(e.enableEpochsHandler) {
+		if e.drwaReader == nil {
+			recordDRWAGateMetric(drwaGateMetricReaderMissing)
+			return nil, errDRWAStateReaderMissing
+		}
+
+		regulated, drwaErr := evaluateDRWAReceiverTransfer(e.drwaReader, vmInput.Arguments[0], vmInput.CallerAddr, acntSnd, e.CurrentRound())
+		if drwaErr != nil {
+			return nil, drwaErr
+		}
+		if regulated {
+			drwaGasCost = computeDRWAReadGasCost(e.gasConfig, e.funcGasCost, 4)
+			if vmInput.GasProvided < e.funcGasCost+drwaGasCost {
+				return nil, ErrNotEnoughGas
+			}
+		}
 	}
 
 	err = e.rolesHandler.CheckAllowedToExecute(acntSnd, vmInput.Arguments[0], []byte(core.ESDTRoleNFTAddQuantity))
@@ -127,7 +156,7 @@ func (e *esdtNFTAddQuantity) ProcessBuiltinFunction(
 
 	vmOutput := &vmcommon.VMOutput{
 		ReturnCode:   vmcommon.Ok,
-		GasRemaining: vmInput.GasProvided - e.funcGasCost,
+		GasRemaining: vmInput.GasProvided - e.funcGasCost - drwaGasCost,
 	}
 
 	addESDTEntryInVMOutput(vmOutput, []byte(core.BuiltInFunctionESDTNFTAddQuantity), vmInput.Arguments[0], nonce, value, vmInput.CallerAddr)

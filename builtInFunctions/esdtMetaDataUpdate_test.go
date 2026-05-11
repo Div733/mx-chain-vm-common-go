@@ -207,6 +207,29 @@ func TestESDTMetaDataUpdate_ProcessBuiltinFunction(t *testing.T) {
 		assert.Equal(t, expectedErr, err)
 		assert.True(t, allowedToExecuteCalled)
 	})
+	t.Run("DRWA enforcement enabled and reader missing", func(t *testing.T) {
+		t.Parallel()
+
+		enableEpochsHandler := &mock.EnableEpochsHandlerStub{
+			IsFlagEnabledCalled: func(flag core.EnableEpochFlag) bool {
+				return true
+			},
+		}
+		e, _ := NewESDTMetaDataUpdateFunc(101, vmcommon.BaseOperationCost{StorePerByte: 1}, &mock.AccountsStub{}, &mock.GlobalSettingsHandlerStub{}, &mock.ESDTNFTStorageHandlerStub{}, &mock.ESDTRoleHandlerStub{}, enableEpochsHandler, &mock.MarshalizerMock{})
+		vmInput := &vmcommon.ContractCallInput{
+			VMInput: vmcommon.VMInput{
+				CallValue:   big.NewInt(0),
+				CallerAddr:  []byte("caller"),
+				GasProvided: 1000,
+				Arguments:   [][]byte{[]byte("TOKEN-123"), {15}, []byte("name"), {}, {}, {}, []byte("uri")},
+			},
+			RecipientAddr: []byte("caller"),
+		}
+
+		vmOutput, err := e.ProcessBuiltinFunction(mock.NewUserAccount([]byte("addr")), nil, vmInput)
+		assert.Nil(t, vmOutput)
+		assert.ErrorIs(t, err, errDRWAStateReaderMissing)
+	})
 	t.Run("update updates only the given args", func(t *testing.T) {
 		t.Parallel()
 
@@ -262,6 +285,7 @@ func TestESDTMetaDataUpdate_ProcessBuiltinFunction(t *testing.T) {
 			},
 		}
 		e, _ := NewESDTMetaDataUpdateFunc(101, vmcommon.BaseOperationCost{StorePerByte: 1}, accounts, globalSettingsHandler, storageHandler, &mock.ESDTRoleHandlerStub{}, enableEpochsHandler, &mock.MarshalizerMock{})
+		e.SetDRWAReader(newNoopDRWAReader())
 
 		vmInput := &vmcommon.ContractCallInput{
 			VMInput: vmcommon.VMInput{

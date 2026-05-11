@@ -1,6 +1,8 @@
 package builtInFunctions
 
 import (
+	"fmt"
+
 	"github.com/mitchellh/mapstructure"
 	"github.com/multiversx/mx-chain-core-go/core"
 	"github.com/multiversx/mx-chain-core-go/core/check"
@@ -11,6 +13,7 @@ var _ vmcommon.BuiltInFunctionFactory = (*builtInFuncCreator)(nil)
 
 var trueHandler = func() bool { return true }
 var falseHandler = func() bool { return false }
+var drwaAccountsReaderFactory = newDRWAAccountsReader
 
 const deleteUserNameFuncName = "DeleteUserName" // all builtInFunction names are upper case
 
@@ -44,6 +47,10 @@ type builtInFuncCreator struct {
 	guardedAccountHandler            vmcommon.GuardedAccountHandler
 	maxNumOfAddressesForTransferRole uint32
 	configAddress                    []byte
+}
+
+type drwaReaderSetter interface {
+	SetDRWAReader(reader drwaStateReader)
 }
 
 // NewBuiltInFunctionsCreator creates a component which will instantiate the built in functions contracts
@@ -212,12 +219,20 @@ func (b *builtInFuncCreator) CreateBuiltInFunctionContainer() error {
 	if err != nil {
 		return err
 	}
+	err = b.attachDRWAReaderIfSupported(newFunc)
+	if err != nil {
+		return err
+	}
 	err = b.builtInFunctions.Add(core.BuiltInFunctionESDTTransfer, newFunc)
 	if err != nil {
 		return err
 	}
 
 	newFunc, err = NewESDTBurnFunc(b.gasConfig.BuiltInCost.ESDTBurn, b.marshaller, globalSettingsFunc, b.enableEpochsHandler)
+	if err != nil {
+		return err
+	}
+	err = b.attachDRWAReaderIfSupported(newFunc)
 	if err != nil {
 		return err
 	}
@@ -254,12 +269,20 @@ func (b *builtInFuncCreator) CreateBuiltInFunctionContainer() error {
 	if err != nil {
 		return err
 	}
+	err = b.attachDRWAReaderIfSupported(newFunc)
+	if err != nil {
+		return err
+	}
 	err = b.builtInFunctions.Add(core.BuiltInFunctionESDTLocalBurn, newFunc)
 	if err != nil {
 		return err
 	}
 
 	newFunc, err = NewESDTLocalMintFunc(b.gasConfig.BuiltInCost.ESDTLocalMint, b.marshaller, globalSettingsFunc, setRoleFunc, b.enableEpochsHandler)
+	if err != nil {
+		return err
+	}
+	err = b.attachDRWAReaderIfSupported(newFunc)
 	if err != nil {
 		return err
 	}
@@ -284,12 +307,20 @@ func (b *builtInFuncCreator) CreateBuiltInFunctionContainer() error {
 	if err != nil {
 		return err
 	}
+	err = b.attachDRWAReaderIfSupported(newFunc)
+	if err != nil {
+		return err
+	}
 	err = b.builtInFunctions.Add(core.BuiltInFunctionESDTNFTAddQuantity, newFunc)
 	if err != nil {
 		return err
 	}
 
-	newFunc, err = NewESDTNFTBurnFunc(b.gasConfig.BuiltInCost.ESDTNFTBurn, b.esdtStorageHandler, globalSettingsFunc, setRoleFunc)
+	newFunc, err = NewESDTNFTBurnFunc(b.gasConfig.BuiltInCost.ESDTNFTBurn, b.esdtStorageHandler, globalSettingsFunc, setRoleFunc, b.enableEpochsHandler)
+	if err != nil {
+		return err
+	}
+	err = b.attachDRWAReaderIfSupported(newFunc)
 	if err != nil {
 		return err
 	}
@@ -299,6 +330,10 @@ func (b *builtInFuncCreator) CreateBuiltInFunctionContainer() error {
 	}
 
 	newFunc, err = NewESDTNFTCreateFunc(b.gasConfig.BuiltInCost.ESDTNFTCreate, b.gasConfig.BaseOperationCost, b.marshaller, globalSettingsFunc, setRoleFunc, b.esdtStorageHandler, b.accounts, b.enableEpochsHandler)
+	if err != nil {
+		return err
+	}
+	err = b.attachDRWAReaderIfSupported(newFunc)
 	if err != nil {
 		return err
 	}
@@ -346,12 +381,20 @@ func (b *builtInFuncCreator) CreateBuiltInFunctionContainer() error {
 	if err != nil {
 		return err
 	}
+	err = b.attachDRWAReaderIfSupported(newFunc)
+	if err != nil {
+		return err
+	}
 	err = b.builtInFunctions.Add(core.BuiltInFunctionESDTNFTTransfer, newFunc)
 	if err != nil {
 		return err
 	}
 
-	newFunc, err = NewESDTNFTCreateRoleTransfer(b.marshaller, b.accounts, b.shardCoordinator)
+	newFunc, err = NewESDTNFTCreateRoleTransfer(b.marshaller, b.accounts, b.shardCoordinator, b.enableEpochsHandler)
+	if err != nil {
+		return err
+	}
+	err = b.attachDRWAReaderIfSupported(newFunc)
 	if err != nil {
 		return err
 	}
@@ -364,12 +407,20 @@ func (b *builtInFuncCreator) CreateBuiltInFunctionContainer() error {
 	if err != nil {
 		return err
 	}
+	err = b.attachDRWAReaderIfSupported(newFunc)
+	if err != nil {
+		return err
+	}
 	err = b.builtInFunctions.Add(core.BuiltInFunctionESDTNFTUpdateAttributes, newFunc)
 	if err != nil {
 		return err
 	}
 
 	newFunc, err = NewESDTNFTAddUriFunc(b.gasConfig.BuiltInCost.ESDTNFTAddURI, b.gasConfig.BaseOperationCost, b.esdtStorageHandler, globalSettingsFunc, setRoleFunc, b.enableEpochsHandler, b.marshaller)
+	if err != nil {
+		return err
+	}
+	err = b.attachDRWAReaderIfSupported(newFunc)
 	if err != nil {
 		return err
 	}
@@ -387,6 +438,10 @@ func (b *builtInFuncCreator) CreateBuiltInFunctionContainer() error {
 		b.enableEpochsHandler,
 		setRoleFunc,
 		b.esdtStorageHandler)
+	if err != nil {
+		return err
+	}
+	err = b.attachDRWAReaderIfSupported(newFunc)
 	if err != nil {
 		return err
 	}
@@ -438,6 +493,10 @@ func (b *builtInFuncCreator) CreateBuiltInFunctionContainer() error {
 		EnableEpochsHandler: b.enableEpochsHandler,
 	}
 	newFunc, err = NewESDTDeleteMetadataFunc(argsNewDeleteFunc)
+	if err != nil {
+		return err
+	}
+	err = b.attachDRWAReaderIfSupported(newFunc)
 	if err != nil {
 		return err
 	}
@@ -564,12 +623,20 @@ func (b *builtInFuncCreator) CreateBuiltInFunctionContainer() error {
 	if err != nil {
 		return err
 	}
+	err = b.attachDRWAReaderIfSupported(newFunc)
+	if err != nil {
+		return err
+	}
 	err = b.builtInFunctions.Add(core.ESDTMetaDataRecreate, newFunc)
 	if err != nil {
 		return err
 	}
 
 	newFunc, err = NewESDTMetaDataUpdateFunc(b.gasConfig.BuiltInCost.ESDTNFTUpdate, b.gasConfig.BaseOperationCost, b.accounts, globalSettingsFunc, b.esdtStorageHandler, setRoleFunc, b.enableEpochsHandler, b.marshaller)
+	if err != nil {
+		return err
+	}
+	err = b.attachDRWAReaderIfSupported(newFunc)
 	if err != nil {
 		return err
 	}
@@ -582,12 +649,20 @@ func (b *builtInFuncCreator) CreateBuiltInFunctionContainer() error {
 	if err != nil {
 		return err
 	}
+	err = b.attachDRWAReaderIfSupported(newFunc)
+	if err != nil {
+		return err
+	}
 	err = b.builtInFunctions.Add(core.ESDTSetNewURIs, newFunc)
 	if err != nil {
 		return err
 	}
 
 	newFunc, err = NewESDTModifyRoyaltiesFunc(b.gasConfig.BuiltInCost.ESDTModifyRoyalties, b.accounts, globalSettingsFunc, b.esdtStorageHandler, setRoleFunc, b.enableEpochsHandler, b.marshaller)
+	if err != nil {
+		return err
+	}
+	err = b.attachDRWAReaderIfSupported(newFunc)
 	if err != nil {
 		return err
 	}
@@ -600,11 +675,33 @@ func (b *builtInFuncCreator) CreateBuiltInFunctionContainer() error {
 	if err != nil {
 		return err
 	}
+	err = b.attachDRWAReaderIfSupported(newFunc)
+	if err != nil {
+		return err
+	}
 	err = b.builtInFunctions.Add(core.ESDTModifyCreator, newFunc)
 	if err != nil {
 		return err
 	}
 
+	return nil
+}
+
+func (b *builtInFuncCreator) attachDRWAReaderIfSupported(builtInFunc vmcommon.BuiltinFunction) error {
+	readerAware, ok := builtInFunc.(drwaReaderSetter)
+	if !ok {
+		return nil
+	}
+
+	reader, err := drwaAccountsReaderFactory(b.accounts)
+	if err != nil {
+		return fmt.Errorf("attach DRWA reader: %w", err)
+	}
+	if reader == nil {
+		return fmt.Errorf("attach DRWA reader: %w", errDRWAStateReaderAttachMissing)
+	}
+
+	readerAware.SetDRWAReader(reader)
 	return nil
 }
 
