@@ -15,7 +15,6 @@ require (
 	github.com/denisbrodbeck/machineid v1.0.1 // indirect
 	github.com/gogo/protobuf v1.3.2 // indirect
 	github.com/golang/protobuf v1.5.3 // indirect
-	github.com/kr/text v0.2.0 // indirect
 	github.com/mr-tron/base58 v1.2.0 // indirect
 	github.com/pelletier/go-toml v1.9.3 // indirect
 	github.com/pmezard/go-difflib v1.0.0 // indirect
@@ -28,4 +27,4 @@ replace github.com/gogo/protobuf => github.com/multiversx/protobuf v1.3.2
 
 replace github.com/multiversx/mx-chain-core-go => github.com/Div733/mx-chain-core-go v0.0.0-20260511065504-1af0ea1f0a2b
 
-replace github.com/multiversx/mx-chain-logger-go => github.com/Div733/mx-chain-logger-go v0.0.0-20250717142923-e88acb7aee7a
+replace github.com/multiversx/mx-chain-logger-go => github.com/Div733/mx-chain-logger-go v0.0.0-20260511073010-e5571e937ae7

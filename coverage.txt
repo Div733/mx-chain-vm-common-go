@@ -510,7 +510,7 @@ github.com/multiversx/mx-chain-vm-common-go/container/mutexMap.go:65.42,68.27 3 
 github.com/multiversx/mx-chain-vm-common-go/container/mutexMap.go:68.27,70.3 1 303
 github.com/multiversx/mx-chain-vm-common-go/container/mutexMap.go:71.2,73.13 2 102
 github.com/multiversx/mx-chain-vm-common-go/container/mutexMap.go:77.44,80.34 3 103
-github.com/multiversx/mx-chain-vm-common-go/container/mutexMap.go:80.34,82.3 1 5160
+github.com/multiversx/mx-chain-vm-common-go/container/mutexMap.go:80.34,82.3 1 5156
 github.com/multiversx/mx-chain-vm-common-go/container/mutexMap.go:83.2,85.15 2 103
 github.com/multiversx/mx-chain-vm-common-go/mock/accountWrapperMock.go:27.48,28.2 0 0
 github.com/multiversx/mx-chain-vm-common-go/mock/accountWrapperMock.go:31.59,33.2 1 0
